@@ -49,16 +49,16 @@ class Server:
 
 
     @command("/whisper")
-    async def whisper(self, connection: socket.socket, receiver: str, message: bytes) -> None:
-        receiver_connection = self.connection_by_username[receiver]
-        await self.send_message(f"{self.connections[connection]} шепчет вам: ".encode("utf-8") + message, connection, receiver_connection)
+    async def whisper(self, connection_sender: socket.socket, receiver_username: str, message: bytes) -> None:
+        connection_receiver = self.connection_by_username[receiver_username]
+        await self.send_message(f"{self.connections[connection_sender]} шепчет вам: ".encode("utf-8") + message, connection_sender, connection_receiver)
 
 
-    async def send_message(self, message: bytes, connection: socket.socket, receiver: Optional[socket.socket]=None) -> None:
+    async def send_message(self, message: bytes, connection_sender: socket.socket, connection_receiver: Optional[socket.socket]=None) -> None:
         loop = asyncio.get_event_loop()
-        receivers = self.connections.items() if receiver is None else {receiver: self.connections[receiver]}.items()
+        receivers = self.connections.items() if connection_receiver is None else {connection_receiver: self.connections[connection_receiver]}.items()
         for con, username in receivers:
-            if con != connection or receiver is not None:
+            if con != connection_sender or connection_receiver is not None:
                 try:
                     asyncio.create_task(loop.sock_sendall(con, message))
                 except Exception as e:
@@ -101,30 +101,45 @@ class Server:
         asyncio.create_task(self.send_message(f"Пользователь {username} отключился".encode("utf-8"), connection))
 
 
+    async def register(self, connection: socket.socket, username: str) -> None:
+        loop = asyncio.get_event_loop()
+
+        await loop.sock_sendall(connection, "Вы новенький,\nпридумайте пароль: ".encode("utf-8"))
+        received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+        while not check_password_validity(received_user_password):
+            await loop.sock_sendall(connection, "Пароль слишком слабый либо содержит запрещенные символы,\n"
+                                                "попробуйте еще раз: ".encode("utf-8"))
+            received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+        async with self.psql_pool.acquire() as psql_connection:
+            await psql_connection.execute(add_user_to_table(username, received_user_password))
+
+
     async def authenticate(self, connection: socket.socket) -> bool:
         loop = asyncio.get_event_loop()
 
         await loop.sock_sendall(connection, "Введите имя пользователя: ".encode("utf-8"))
         username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+        while not check_username_validity(username):
+            await loop.sock_sendall(connection, "Имя пользователя некорректно,"
+                                                "\nпопробуйте другое имя пользователя: ".encode("utf-8"))
+            username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
         async with self.psql_pool.acquire() as psql_connection:
-            user_password = (await psql_connection.fetchrow(get_password_by_username(username)))
-            if user_password is not None:
-                user_password = user_password["password"]
+            database_user_password = (await psql_connection.fetchrow(get_password_by_username(username)))
+            if database_user_password is not None:
+                database_user_password = database_user_password["password"]
+        received_user_password = None
+
         try:
-            if user_password is None:
-                await loop.sock_sendall(connection, "Вы новенький,\nпридумайте пароль: ".encode("utf-8"))
-                password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-                user_password = password
-                async with self.psql_pool.acquire() as psql_connection:
-                    await psql_connection.execute(add_user_to_table(username, user_password))
+            if database_user_password is None:
+                await self.register(connection, username)
             else:
                 await loop.sock_sendall(connection, "Введите пароль: ".encode("utf-8"))
-                password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-                while password != user_password and password != "":
+                received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+                while received_user_password != database_user_password and received_user_password != "":
                     await loop.sock_sendall(connection, "Вы ввели неправильный пароль,\nпопробуйте еще раз: ".encode("utf-8"))
-                    password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+                    received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
 
-            if password == user_password:
+            if received_user_password == database_user_password:
                 self.connections[connection] = username
                 self.connection_by_username[username] = connection
                 return True

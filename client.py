@@ -43,8 +43,8 @@ class Client:
         send_task = asyncio.create_task(self.send())
         try:
             await asyncio.wait((recv_task, send_task), return_when=asyncio.FIRST_COMPLETED)
-        except Exception as exc:
-            print(f"Произошла ошибка {exc}")
+        except Exception as e:
+            print(f"Произошла ошибка {e}")
         finally:
             for task in (recv_task, send_task):
                 task.cancel()
