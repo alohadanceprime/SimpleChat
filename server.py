@@ -2,6 +2,7 @@ import asyncio
 import asyncpg
 import socket
 from utils import *
+from database_handling.execute_requests import *
 from typing import Optional, Any, Callable
 
 
@@ -112,8 +113,7 @@ class Server:
             await loop.sock_sendall(connection, "Пароль слишком слабый либо содержит запрещенные символы,\n"
                                                 "попробуйте еще раз: ".encode("utf-8"))
             received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        async with self.__psql_pool.acquire() as psql_connection:
-            await psql_connection.execute(add_user_to_table(username, received_user_password))
+        await add_user(self.__psql_pool, username, received_user_password)
 
 
     async def __authenticate(self, connection: socket.socket) -> bool:
@@ -125,10 +125,7 @@ class Server:
                 await loop.sock_sendall(connection, "Имя пользователя некорректно,"
                                                     "\nпопробуйте другое имя пользователя: ".encode("utf-8"))
                 username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-            async with self.__psql_pool.acquire() as psql_connection:
-                database_user_password = (await psql_connection.fetchrow(get_password_by_username(username)))
-                if database_user_password is not None:
-                    database_user_password = database_user_password["password"]
+            database_user_password = await get_password_by_username(self.__psql_pool, username)
             received_user_password = None
         except Exception:
             print("Имя пользователя не получено")
@@ -192,4 +189,4 @@ def create_server(host: str, port: int, servername: str) -> None:
 
 
 if __name__ == "__main__":
-    create_server("127.0.0.1", 9000)
+    create_server("127.0.0.1", 9000, "test")

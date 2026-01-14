@@ -1,4 +1,4 @@
-def get_password_by_username(username: str) -> str:
+def get_password_by_username_req(username: str) -> str:
     return \
         f"""
         SELECT password
@@ -7,7 +7,7 @@ def get_password_by_username(username: str) -> str:
         """
 
 
-def add_user_to_table(username: str, password: str) -> str:
+def add_user_to_table_req(username: str, password: str) -> str:
     return \
         f"""
         INSERT INTO users_list(username, password)
@@ -15,15 +15,7 @@ def add_user_to_table(username: str, password: str) -> str:
         """
 
 
-def get_server_list() -> str:
-    return \
-        f"""
-        SELECT servername
-        FROM servers_list
-        """
-
-
-def get_host_port(servername: str) -> str:
+def get_host_port_req(servername: str) -> str:
     return \
         f"""
         SELECT host, port
@@ -32,7 +24,7 @@ def get_host_port(servername: str) -> str:
         """
 
 
-def check_if_server_exists(servername: str) -> str:
+def check_if_server_exists_req(servername: str) -> str:
     return \
         f"""
         SELECT servername
@@ -41,9 +33,17 @@ def check_if_server_exists(servername: str) -> str:
         """
 
 
-def add_server_to_table(servername: str, host: str, port: int)-> str:
+def add_server_to_table_req(servername: str, host: str, port: int)-> str:
     return \
         f"""
         INSERT INTO servers_list(servername, host, port)
         VALUES('{servername}', '{host}', {port});
         """
+
+
+get_server_list_req: str=\
+    f"""
+    SELECT servername
+    FROM servers_list
+    """
+

@@ -1,6 +1,7 @@
 from server import *
 from utils import *
 from multiprocessing import Process
+from database_handling import *
 from typing import Any, Optional
 
 
@@ -46,18 +47,14 @@ class MasterServer:
     @command("/server_list")
     async def __get_server_list(self, connection: socket.socket) -> None:
         loop = asyncio.get_event_loop()
-        async with self.__psql_pool.acquire() as psql_connection:
-            server_list = (await psql_connection.fetch(get_server_list()))
-        if server_list:
-            server_list = [i["servername"] for i in server_list]
+        server_list = await get_server_list(self.__psql_pool)
         await loop.sock_sendall(connection, ("Список серверов:\n" + "\n".join(server_list)).encode("utf-8"))
 
 
     @command("/connect")
     async def __connect(self, connection: socket.socket, servername: str) -> None:
         loop = asyncio.get_event_loop()
-        async with self.__psql_pool.acquire() as psql_connection:
-            sql_resp = await psql_connection.fetchrow(get_host_port(servername))
+        sql_resp = await get_host_port(self.__psql_pool, servername)
         if sql_resp is None:
             await loop.sock_sendall(connection, "server_is_not_exist".encode("utf-8"))
             return
@@ -65,9 +62,7 @@ class MasterServer:
         response = (await loop.sock_recv(connection, 1024)).decode("utf-8")
         if response != "ready_for_connection":
             return
-        host, port = sql_resp["host"], sql_resp["port"]
-        if host == "localhost":
-            host = "127.0.0.1"
+        host, port = sql_resp
 
         if servername not in self.__running_servers:
             self.__run_server(servername, host, port)
@@ -82,14 +77,12 @@ class MasterServer:
         loop = asyncio.get_event_loop()
         await loop.sock_sendall(connection, "Придумайте имя сервера".encode("utf-8"))
         servername = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        async with self.__psql_pool.acquire()  as psql_connection:
-            is_exists = (await psql_connection.fetchrow(check_if_server_exists(servername))) is not None
+        is_exists = await check_if_server_exists(self.__psql_pool, servername)
         while is_exists:
             await loop.sock_sendall(connection, "Сервер с заданным именем уже существует,\n"
                                                 "попробуйте ввести другое имя:".encode("utf-8"))
             servername = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-            async with self.__psql_pool.acquire() as psql_connection:
-                is_exists = (await psql_connection.fetchrow(check_if_server_exists(servername))) is not None
+            is_exists = await check_if_server_exists(self.__psql_pool, servername)
 
         while True:
             try:
@@ -99,8 +92,7 @@ class MasterServer:
                 port = int((await loop.sock_recv(connection, 1024)).decode("utf-8"))
                 if not check_host_port_validity(host, port):
                     raise "Invalid host/port"
-                async with self.__psql_pool.acquire()  as psql_connection:
-                    await psql_connection.execute(add_server_to_table(servername, host, port))
+                await add_server_to_table(self.__psql_pool, servername, host, port)
                 break
             except Exception:
                 await loop.sock_sendall(connection, "Данные хост + порт уже заняты/ они не корректны".encode("utf-8"))
