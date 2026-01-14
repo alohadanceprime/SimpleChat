@@ -9,4 +9,6 @@ CREATE DATABASE userdata;
 
 3. Установите asyncpg
 
-4. Поставить свои username, password и т.п. в psql params, проверить свободность портов
+4. Поставить свои username, password для sql и т.п. в master_server.py
+
+5. Запустить master_server.py
