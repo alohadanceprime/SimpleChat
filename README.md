@@ -12,3 +12,5 @@ CREATE DATABASE userdata;
 4. Поставить свои username, password для sql и т.п. в master_server.py
 
 5. Запустить master_server.py
+
+6. Запустить client.py

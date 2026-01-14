@@ -56,14 +56,14 @@ class MasterServer:
     @command("/connect")
     async def __connect(self, connection: socket.socket, servername: str) -> None:
         loop = asyncio.get_event_loop()
-        await loop.sock_sendall(connection, "connection_approved".encode("utf-8"))
-        response = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        if response != "ready_for_connection":
-            return
         async with self.__psql_pool.acquire() as psql_connection:
             sql_resp = await psql_connection.fetchrow(get_host_port(servername))
         if sql_resp is None:
             await loop.sock_sendall(connection, "server_is_not_exist".encode("utf-8"))
+            return
+        await loop.sock_sendall(connection, "connection_approved".encode("utf-8"))
+        response = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+        if response != "ready_for_connection":
             return
         host, port = sql_resp["host"], sql_resp["port"]
         if host == "localhost":
@@ -110,7 +110,7 @@ class MasterServer:
 
 
     def __run_server(self, servername: str, host: str, port: int) -> None:
-        p = Process(target=create_server, args=(host, port), daemon=True)
+        p = Process(target=create_server, args=(host, port, servername), daemon=True)
         p.start()
         self.__running_servers[servername] = ((host, port), p)
         print(f"Сервер {servername} запущен на {host}:{port}, PID={p.pid}")

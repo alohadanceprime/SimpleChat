@@ -6,7 +6,7 @@ from typing import Optional, Any, Callable
 
 
 class Server:
-    def __init__(self, host: str, port: int,
+    def __init__(self, host: str, port: int, servername: str,
                  psql_host: str ="localhost", psql_port: int = 5432,
                  psql_user: str = "postgres", psql_password: str ="admin",
                  psql_db: str = "userdata") -> None:
@@ -14,6 +14,7 @@ class Server:
         self.__server: socket.socket = socket.socket()
         self.__server.bind(self._addr)
         self.__server.setblocking(False)
+        self._servername: str = servername
 
         self.__connections: dict[socket.socket, str] = {}
         self.__connection_by_username: dict[str, socket.socket] = {}
@@ -117,18 +118,21 @@ class Server:
 
     async def __authenticate(self, connection: socket.socket) -> bool:
         loop = asyncio.get_event_loop()
-
         await loop.sock_sendall(connection, "Введите имя пользователя: ".encode("utf-8"))
-        username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        while not check_username_validity(username):
-            await loop.sock_sendall(connection, "Имя пользователя некорректно,"
-                                                "\nпопробуйте другое имя пользователя: ".encode("utf-8"))
+        try:
             username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        async with self.__psql_pool.acquire() as psql_connection:
-            database_user_password = (await psql_connection.fetchrow(get_password_by_username(username)))
-            if database_user_password is not None:
-                database_user_password = database_user_password["password"]
-        received_user_password = None
+            while not check_username_validity(username):
+                await loop.sock_sendall(connection, "Имя пользователя некорректно,"
+                                                    "\nпопробуйте другое имя пользователя: ".encode("utf-8"))
+                username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+            async with self.__psql_pool.acquire() as psql_connection:
+                database_user_password = (await psql_connection.fetchrow(get_password_by_username(username)))
+                if database_user_password is not None:
+                    database_user_password = database_user_password["password"]
+            received_user_password = None
+        except Exception:
+            print("Имя пользователя не получено")
+            return False
 
         try:
             if database_user_password is None:
@@ -161,7 +165,7 @@ class Server:
 
         username = self.__connections[connection]
         print(f"Новое подключение: {username}")
-        asyncio.create_task(loop.sock_sendall(connection, f"Вы подключились к серверу {self._addr}"
+        asyncio.create_task(loop.sock_sendall(connection, f"Вы подключились к серверу {self._servername}"
                                                           f"\nПолучить список доступных команд: /help".encode("utf-8")))
         send = asyncio.create_task(self.__send_message(f"Подключился пользователь: {username}".encode("utf-8"), connection))
         rec = asyncio.create_task(self.__receive(connection))
@@ -181,8 +185,8 @@ class Server:
             asyncio.create_task(self.__connect_user(connection))
 
 
-def create_server(host, port) -> None:
-    server = Server(host, port)
+def create_server(host: str, port: int, servername: str) -> None:
+    server = Server(host, port, servername)
     asyncio.run(server.listen())
 
 

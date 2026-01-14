@@ -35,6 +35,11 @@ class Client:
             elif (command := response.split(" ")[0]) == "/connect":
                 if self.__receive_task:
                     self.__receive_task.cancel()
+                if len(response.split(" ")) != 2:
+                    print("Вы не указали имя сервера\nПример использования команды:\n"
+                          "/connect YourServername")
+                    self.__receive_task = asyncio.create_task(self.__receive())
+                    continue
                 servername = response.split(" ")[1]
                 await loop.sock_sendall(self.__sock, (command + " " + servername).encode("utf-8"))
                 server_response = (await loop.sock_recv(self.__sock, 1024)).decode("utf-8")
@@ -51,7 +56,7 @@ class Client:
                     self._addr = host, port
                     await self.connect()
                 else:
-                    asyncio.create_task(self.__receive())
+                    self.__receive_task = asyncio.create_task(self.__receive())
                     print("Такой сервер не существует")
 
                     continue
@@ -73,14 +78,14 @@ class Client:
 
         try:
             await self.__send_task
-        except Exception as e:
-            print(f"Произошла ошибка {e}")
+        except Exception:
+            pass
+
         finally:
             self._is_connected = False
             for task in (self.__receive_task, self.__send_task):
                 task.cancel()
             self.__sock.close()
-            print("Соединение разорвано")
 
 
 
