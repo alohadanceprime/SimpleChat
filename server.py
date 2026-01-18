@@ -11,11 +11,16 @@ class Server:
                  psql_host: str ="localhost", psql_port: int = 5432,
                  psql_user: str = "postgres", psql_password: str ="admin",
                  psql_db: str = "userdata") -> None:
-        self._addr: tuple[str, int] = host, port
-        self.__server: socket.socket = socket.socket()
-        self.__server.bind(self._addr)
-        self.__server.setblocking(False)
-        self._servername: str = servername
+        try:
+            self._addr: tuple[str, int] = host, port
+            self.__server: socket.socket = socket.socket()
+            self.__server.bind(self._addr)
+            self.__server.setblocking(False)
+            self._servername: str = servername
+        except socket.error as e:
+            raise RuntimeError(f"Failed to start server({servername}): {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error: {e} with {servername}")
 
         self.__connections: dict[socket.socket, str] = {}
         self.__connection_by_username: dict[str, socket.socket] = {}
@@ -28,7 +33,9 @@ class Server:
             "password": psql_password,
             "database": psql_db,
             "min_size": 8,
-            "max_size": 16
+            "max_size": 16,
+            "timeout": 30,
+            "command_timeout": 30
         }
         self.__psql_pool: Optional[asyncpg.Pool] = None
 
@@ -40,31 +47,45 @@ class Server:
 
     @command("/help")
     async def __help(self, connection: socket.socket) -> None:
-        await self.__send_message(("Список доступных команд:\n" +
-                                   ("\n".join(i for i in self.__commands.keys()))).encode("utf-8"), connection, connection)
+        try:
+            await self.__send_message(("Список доступных команд:\n" +
+                                   ("\n".join(i for i in self.__commands.keys()))).encode("utf-8"),
+                                      connection, connection)
+        except Exception as e:
+            print(f"Произошла ошибка {e} на сервере {self._servername} "
+                  f"при попытка отослать список доступных команд пользователю {self.__connections[connection]}")
 
 
     @command("/users_online")
     async def __users_online(self, connection: socket.socket) -> None:
-        await self.__send_message((f"Пользователи онлайн:\n" +
-                                   ("\n".join(i for i in sorted(self.__connections.values())))).encode("utf-8"), connection, connection)
+        try:
+            await self.__send_message((f"Пользователи онлайн:\n" +
+                                   ("\n".join(i for i in sorted(self.__connections.values())))).encode("utf-8"),
+                                      connection, connection)
+        except Exception as e:
+            print(f"Произошла ошибка {e} на сервере {self._servername} "
+                  f"при попытка отослать список пользователей в сети пользователю {self.__connections[connection]}")
 
 
     @command("/whisper")
     async def __whisper(self, connection_sender: socket.socket, receiver_username: str, message: bytes) -> None:
         connection_receiver = self.__connection_by_username[receiver_username]
-        await self.__send_message(f"{self.__connections[connection_sender]} шепчет вам: ".encode("utf-8") + message, connection_sender, connection_receiver)
+        await self.__send_message(f"{self.__connections[connection_sender]} шепчет вам: ".encode("utf-8") + message,
+                                  connection_sender, connection_receiver)
 
 
-    async def __send_message(self, message: bytes, connection_sender: socket.socket, connection_receiver: Optional[socket.socket]=None) -> None:
+    async def __send_message(self, message: bytes, connection_sender: socket.socket,
+                             connection_receiver: Optional[socket.socket]=None) -> None:
         loop = asyncio.get_event_loop()
-        receivers = self.__connections.items() if connection_receiver is None else {connection_receiver: self.__connections[connection_receiver]}.items()
+        receivers = self.__connections.items() if connection_receiver is None \
+            else {connection_receiver: self.__connections[connection_receiver]}.items()
         for con, username in receivers:
             if con != connection_sender or connection_receiver is not None:
                 try:
                     asyncio.create_task(loop.sock_sendall(con, message))
                 except Exception as e:
-                    print(f"Произошла ошибка {e} с пользователем {self.__connections[con]}")
+                    print(f"Произошла ошибка {e} при попытке отослать сообщение пользователю {self.__connections[con]} "
+                          f"на сервере {self._servername}")
                     await self.__disconnect(con)
 
 
@@ -80,14 +101,18 @@ class Server:
                     break
                 message = message.decode("utf-8")
                 if (com := message.split()[0]) in self.__commands:
-                    if len(message.split(" ")) > 1:
-                        receiver = message.split(" ")[1]
-                        msg = " ".join(message.split()[2:])
-                        await self.__commands[com](connection, receiver, msg.encode("utf-8"))
-                    else:
-                        await self.__commands[com](connection)
+                    try:
+                        if len(message.split(" ")) > 1:
+                            receiver = message.split(" ")[1]
+                            msg = " ".join(message.split()[2:])
+                            await self.__commands[com](connection, receiver, msg.encode("utf-8"))
+                        else:
+                            await self.__commands[com](connection)
+                    except Exception as e:
+                        print(f"Произошла ошибка {e} при попытке выполнить команду {com} на сервере {self._servername}")
                 else:
-                    asyncio.create_task(self.__send_message(f"{username}: ".encode("utf-8") + message.encode("utf-8"), connection))
+                    asyncio.create_task(self.__send_message(f"{username}: ".encode("utf-8") +
+                                                            message.encode("utf-8"), connection))
 
         except Exception as e:
             print(f"Произошла ошибка {e} с пользователем {username}")
@@ -106,14 +131,22 @@ class Server:
 
     async def __register(self, connection: socket.socket, username: str) -> None:
         loop = asyncio.get_event_loop()
-
-        await loop.sock_sendall(connection, "Вы новенький,\nпридумайте пароль: ".encode("utf-8"))
-        received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        while not check_password_validity(received_user_password):
-            await loop.sock_sendall(connection, "Пароль слишком слабый либо содержит запрещенные символы,\n"
-                                                "попробуйте еще раз: ".encode("utf-8"))
+        try:
+            await loop.sock_sendall(connection, "Вы новенький,\nпридумайте пароль: ".encode("utf-8"))
             received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-        await add_user(self.__psql_pool, username, received_user_password)
+            while not check_password_validity(received_user_password):
+                await loop.sock_sendall(connection, "Пароль слишком слабый либо содержит запрещенные символы,\n"
+                                                    "попробуйте еще раз: ".encode("utf-8"))
+                received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
+            try:
+                await add_user(self.__psql_pool, username, received_user_password)
+            except (asyncpg.PostgresError, ConnectionError) as e:
+                print(f"Не удалось добавить пользователя {username} на сервере {self._servername}: {e}")
+                return
+
+        except Exception as e:
+            print(f"Произошла ошибка {e} при попытке зарегистрировать пользователя {connection} "
+                  f"на сервере {self._servername}")
 
 
     async def __authenticate(self, connection: socket.socket) -> bool:
@@ -125,10 +158,15 @@ class Server:
                 await loop.sock_sendall(connection, "Имя пользователя некорректно,"
                                                     "\nпопробуйте другое имя пользователя: ".encode("utf-8"))
                 username = (await loop.sock_recv(connection, 1024)).decode("utf-8")
-            database_user_password = await get_password_by_username(self.__psql_pool, username)
+            try:
+                database_user_password = await get_password_by_username(self.__psql_pool, username)
+            except (asyncpg.PostgresError, ConnectionError) as e:
+                print(f"Произошла ошибка {e} при попытке получить пароль пользователя на сервере {self._servername}")
+                return False
             received_user_password = None
-        except Exception:
-            print("Имя пользователя не получено")
+        except Exception as e:
+            print(f"Произошла ошибка {e} при попытке получить имя пользователя "
+                  f"{connection} на сервере {self._servername}")
             return False
 
         try:
@@ -138,7 +176,8 @@ class Server:
                 await loop.sock_sendall(connection, "Введите пароль: ".encode("utf-8"))
                 received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
                 while received_user_password != database_user_password and received_user_password != "":
-                    await loop.sock_sendall(connection, "Вы ввели неправильный пароль,\nпопробуйте еще раз: ".encode("utf-8"))
+                    await loop.sock_sendall(connection, "Вы ввели неправильный пароль,\n"
+                                                        "попробуйте еще раз: ".encode("utf-8"))
                     received_user_password = (await loop.sock_recv(connection, 1024)).decode("utf-8")
 
             if received_user_password == database_user_password:
@@ -153,23 +192,32 @@ class Server:
     async def __connect_user(self, connection: socket.socket) -> None:
         loop = asyncio.get_event_loop()
         connection.setblocking(False)
+        try:
+            status = await self.__authenticate(connection)
+            if not status:
+                print(f"Соединение с {connection} не установлено")
+                connection.close()
+                return
 
-        status = await self.__authenticate(connection)
-        if not status:
-            print(f"Соединение с {connection} не установлено")
-            connection.close()
+            username = self.__connections[connection]
+            print(f"Новое подключение: {username}")
+            asyncio.create_task(loop.sock_sendall(connection, f"Вы подключились к серверу {self._servername}"
+                                                              f"\nПолучить список доступных команд: "
+                                                              f"/help".encode("utf-8")))
+            send = asyncio.create_task(self.__send_message(f"Подключился пользователь: {username}".encode("utf-8"),
+                                                           connection))
+            rec = asyncio.create_task(self.__receive(connection))
+        except Exception as e:
+            print(f"Произошла ошибка {e} при попытке подключить пользователя {connection} "
+                  f"на сервере {self._servername}")
             return
-
-        username = self.__connections[connection]
-        print(f"Новое подключение: {username}")
-        asyncio.create_task(loop.sock_sendall(connection, f"Вы подключились к серверу {self._servername}"
-                                                          f"\nПолучить список доступных команд: /help".encode("utf-8")))
-        send = asyncio.create_task(self.__send_message(f"Подключился пользователь: {username}".encode("utf-8"), connection))
-        rec = asyncio.create_task(self.__receive(connection))
         await asyncio.gather(send, rec)
 
     async def __create_pool(self) -> None:
-        self.__psql_pool = await asyncpg.create_pool(**self.__psql_params)
+        try:
+            self.__psql_pool = await asyncpg.create_pool(**self.__psql_params)
+        except (asyncpg.exceptions.PostgresError, ConnectionError, TimeoutError) as e:
+            raise RuntimeError(f"Failed to create pool: {e} at server {self._servername}")
 
 
     async def listen(self) -> None:

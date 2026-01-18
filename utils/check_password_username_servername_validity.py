@@ -24,7 +24,7 @@ def check_password_validity(password: str) -> bool:
 
 
 def check_username_validity(username: str) -> bool:
-    if len(username) < 6 or len(username) > 64:
+    if len(username) < 3 or len(username) > 64:
         return False
 
     for char in username:
@@ -38,3 +38,12 @@ def check_username_validity(username: str) -> bool:
     return True
 
 
+def check_servername_validity(servername: str) -> bool:
+    if len(servername) < 3 or len(servername) > 128:
+        return False
+
+    for char in servername:
+        if char in banned_symbols:
+            return False
+
+    return True

@@ -14,11 +14,13 @@ async def get_password_by_username(pool: Pool, username: str) -> Optional[str]:
         return await psql_connection.fetchval(get_password_by_username_req(username))
 
 
-async def get_server_list(pool: Pool) -> Optional[str]:
+async def get_server_list(pool: Pool) -> list[str]:
     async with pool.acquire() as psql_connection:
         server_list = (await psql_connection.fetch(get_server_list_req))
     if server_list:
         server_list = [i["servername"] for i in server_list]
+    else:
+        server_list = ["Нет доступных серверов"]
     return server_list
 
 
